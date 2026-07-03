@@ -17,6 +17,12 @@ const rtcConfig = {
 function App(){
   const [status,setStatus] = useState("Diconnected");
   const [roomId,setRoomId] = useState("");
+  const [selectedFile, setSelectedFile] = useState(null);
+
+  //variables for handling files
+  const incomingFileMetadata = useRef(null);
+  const receivedChunkBuffer = useRef([]);
+  const byteReceivedCount = useRef(0);
  
   {/*
     -> socketRef holds instance of an active socket.io-client that has a open 
@@ -39,12 +45,41 @@ function App(){
   const roomIdRef = useRef("");
 
   const setupDataChannelListeners = () => {
+    dataChannelRef.current.binaryType = 'arraybuffer';
+
     dataChannelRef.current.onopen = () => {
       setStatus("Connected P2P (WebRTC Direct)");
     };
 
     dataChannelRef.current.onmessage = (event) => {
-      alert(`Direct P2P Message: ${event.data}`);
+      if(typeof event.data === 'string'){
+        try{
+          const message = JSON.parse(event.data);
+          if(message.type === 'header'){
+            incomingFileMetadata.current = message;
+            receivedChunkBuffer.current = [];
+            byteReceivedCount.current = 0;
+            setStatus(`Incoming file payload: ${message.name}`);
+            return;
+          }
+        } catch (err){
+          console.log("Plain message Text:", event.data);
+        }
+      }
+
+      if(event.data instanceof ArrayBuffer){
+        if(!incomingFileMetadata.current){
+          return;
+        }
+
+        receivedChunkBuffer.current.push(event.data);
+        byteReceivedCount.current += event.data.byteLength;
+        console.log(`Received chunk: Progress ${byteReceivedCount.current} / ${incomingFileMetadata.current.size} bytes`);
+        if(byteReceivedCount.current >= incomingFileMetadata.current.size){
+          setStatus(`file assembly complete! Triggering download...`);
+          triggerFileDownload();
+        }
+      } 
     };
   };
 
@@ -160,6 +195,78 @@ function App(){
     }
   }
  
+  ///this function below handles downloading files
+  const triggerFileDownload = () => {
+    if(!incomingFileMetadata.current){
+      return;
+    }
+
+    const fileBlob = new Blob(receivedChunkBuffer.current, {type: incomingFileMetadata.current.mimeType});
+    const downloadUrl = URL.createObjectURL(fileBlob);
+
+    const linkNode = document.createElement('a');
+    linkNode.href = downloadUrl;
+    linkNode.download = incomingFileMetadata.current.name;
+    document.body.appendChild(linkNode);
+    linkNode.click();
+    document.body.removeChild(linkNode);
+    URL.revokeObjectURL(downloadUrl);
+
+    incomingFileMetadata.current = null;
+    receivedChunkBuffer.current = [];
+    byteReceivedCount.current = 0;
+
+    setStatus('File download complete!');
+  }
+
+  //this function will slice the file into smaller chunks and send them over the data channel
+  const streamFileChunks = (file) => {
+    const fileReader = new FileReader();
+    let currentOffset = 0;
+    const CHUNK_SIZE = 16384; // 16KB chunks
+
+    fileReader.onload = (e) => {
+      const bufferSlice = e.target.result;
+      dataChannelRef.current.send(bufferSlice);
+      currentOffset += bufferSlice.byteLength;
+
+      if(currentOffset < file.size){
+        loadNextChunkSlice();
+      }else{
+        setStatus(`File sent fully`);
+      }
+    };
+
+    const loadNextChunkSlice = () => {
+      const sliceStart = currentOffset;
+      const sliceEnd = Math.min(currentOffset + CHUNK_SIZE, file.size);
+      const fileBlobSlice = file.slice(sliceStart,sliceEnd);
+      fileReader.readAsArrayBuffer(fileBlobSlice);
+    };
+
+    loadNextChunkSlice();
+  }
+
+
+  const handleSendFileHeader = () => {
+    if(!dataChannelRef.current || dataChannelRef.current.readyState !== 'open'){
+      return alert("P2P tunnel is not open yet");
+    }
+
+    const headerInfo = {
+      type: 'header',
+      name: selectedFile.name,
+      size: selectedFile.size,
+      mimeType : selectedFile.type
+    };
+
+    dataChannelRef.current.send(JSON.stringify(headerInfo));
+
+    console.log("Metadata manifest handshake dispatched over the pipe", headerInfo);
+    setStatus(`Streaming the file: ${selectedFile.name}...`);
+    streamFileChunks(selectedFile);
+  }
+ 
   return(
     <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
       <h1>RoninMesh P2P File Sharing 🚀</h1>
@@ -174,6 +281,28 @@ function App(){
         />
         <button onClick={handleJoinRoom}>Join / Create Room</button>
         <button onClick={handleSendMessage} style={{marginLeft: "10px"}}>Send test P2P</button>
+      </div>
+
+      //file sharing part of the file
+      <div style={{ marginTop: '20px', padding: '15px', background: '#f9f9f9', borderRadius: '8px' }}>
+        <h3>Share a Local File</h3>
+        <input
+          type="file" onChange={(e) => setSelectedFile(e.target.files[0])}
+          style={{ display: 'block', marginBottom: '10px' }}
+        />
+        {
+          selectedFile && (
+            <p style={{fontSize: '14px', color: '#555'}}>
+              <strong>Selected:</strong> {selectedFile.name} ({(selectedFile.size / 1024 / 1024).toFixed(2)} MB)
+            </p>
+          )
+        }
+
+        <button
+        onClick={handleSendFileHeader} disabled={!selectedFile} 
+        style={{ padding: '8px 16px', background: '#007bff', color: 'white', border: 'none', borderRadius: '4px' }}>
+          Send File
+        </button>
       </div>
     </div>
   );
