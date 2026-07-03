@@ -18,6 +18,8 @@ function App(){
   const [status,setStatus] = useState("Diconnected");
   const [roomId,setRoomId] = useState("");
   const [selectedFile, setSelectedFile] = useState(null);
+  const [progress, setProgress] = useState(0);
+  const [isSenderProgress, setIsSenderProgress] = useState(false);
 
   //variables for handling files
   const incomingFileMetadata = useRef(null);
@@ -75,6 +77,12 @@ function App(){
         receivedChunkBuffer.current.push(event.data);
         byteReceivedCount.current += event.data.byteLength;
         console.log(`Received chunk: Progress ${byteReceivedCount.current} / ${incomingFileMetadata.current.size} bytes`);
+
+        //receiver progress loading part:
+        setIsSenderProgress(false);
+        const pct = Math.round((byteReceivedCount.current / incomingFileMetadata.current.size) * 100);
+        setProgress(pct);
+
         if(byteReceivedCount.current >= incomingFileMetadata.current.size){
           setStatus(`file assembly complete! Triggering download...`);
           triggerFileDownload();
@@ -84,10 +92,30 @@ function App(){
   };
 
   useEffect(() => {
+    //even before loading we are setting up the room 
+    //scenario A: if the user is the one first entering we generate a random room id autom atically for them.
+    //scenario b if the user is the one that clicked the link , then we autofill the room id for them .
+    //the below coe block is the logic for that part.
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const sharedRoomId = urlParams.get('room');
+
+    if (sharedRoomId) {
+      // Scenario B: You clicked a friend's link! Auto-fill the targeted room
+      setRoomId(sharedRoomId);
+      roomIdRef.current = sharedRoomId;
+    } else {
+      // Scenario A: You opened the app fresh! Auto-create a random room code
+      const automaticCode = generateRandomRoomId();
+      setRoomId(automaticCode);
+      roomIdRef.current = automaticCode;
+    }
+
     socketRef.current = io(BACKEND_URL);
 
     socketRef.current.on('connect', () => {
-      setStatus(`Connect to Server(ID: ${socketRef.current.id})`);
+      setStatus("Connected to signaling server");
+      socketRef.current.emit('join-room',roomIdRef.current);
     })
 
     socketRef.current.on('peer-joined', async (peerId) => {
@@ -194,6 +222,36 @@ function App(){
       alert("P2P tunnel is not open yet");
     }
   }
+
+  //this function helps to generate invite link and also to share it.
+  //here i have used the web share api and copying the link to clipboard as a  fallback behaviour since web share api is not supported in many browsers 
+  const handleShareInvite = async () => {
+    if(!roomIdRef.current){
+      alert("Space connection is not initialized yet!.");
+    }
+
+    const inviteUrl = `${window.origin}?room=${roomIdRef.current}`;
+
+    if(navigator.share){
+      try{
+        await navigator.share({
+          title: 'Join my Room!',
+          text: 'Connect directly tab to tab and share files safely:',
+          url: inviteUrl,
+        });
+        console.log("System share sheet opened successfully");
+      }catch(err){
+        console.log("Share sheet dismissed:", err);
+      }
+    }else{
+      try {
+        await navigator.clipboard.writeText(inviteUrl);
+        alert(`Invite link copied to clipboard! Send this to your friend:\n${inviteUrl}`);
+      }catch (clipboardErr) {
+        alert(`Could not copy link automatically. Manually share this space code: ${roomIdRef.current}`);
+      }
+    }
+  }
  
   ///this function below handles downloading files
   const triggerFileDownload = () => {
@@ -217,6 +275,7 @@ function App(){
     byteReceivedCount.current = 0;
 
     setStatus('File download complete!');
+    setProgress(0);
   }
 
   //this function will slice the file into smaller chunks and send them over the data channel
@@ -229,6 +288,11 @@ function App(){
       const bufferSlice = e.target.result;
       dataChannelRef.current.send(bufferSlice);
       currentOffset += bufferSlice.byteLength;
+
+      //sender progress loading part:
+      setIsSenderProgress(true);
+      const pct = Math.floor((currentOffset / file.size) * 100);
+      setProgress(pct);
 
       if(currentOffset < file.size){
         loadNextChunkSlice();
@@ -266,44 +330,112 @@ function App(){
     setStatus(`Streaming the file: ${selectedFile.name}...`);
     streamFileChunks(selectedFile);
   }
+
+  //this function helps tpo generate random room names
+  const generateRandomRoomId = () => {
+    const words = ['cyber', 'vortex', 'ronin', 'mesh', 'nexus', 'sonic', 'aurora', 'shadow', 'orbit', 'plasma'];
+    const randomWord1 = words[Math.floor(Math.random() * words.length)];
+    const randomWord2 = words[Math.floor(Math.random() * words.length)];
+    const randomNum = Math.floor(1000 + Math.random() * 9000); // 4-digit numeric pin tail
+    return `${randomWord1}-${randomWord2}-${randomNum}`;
+  };
  
-  return(
-    <div style={{ padding: '20px', fontFamily: 'sans-serif' }}>
-      <h1>RoninMesh P2P File Sharing 🚀</h1>
-      <p><strong>Status:</strong> {status}</p>
+ return (
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-center p-6 font-sans antialiased selection:bg-emerald-500/20 selection:text-emerald-400">
       
-      <div>
-        <input 
-          type="text" 
-          placeholder="Enter Room ID Name" 
-          value={roomId}
-          onChange={(e) => setRoomId(e.target.value)}
-        />
-        <button onClick={handleJoinRoom}>Join / Create Room</button>
-        <button onClick={handleSendMessage} style={{marginLeft: "10px"}}>Send test P2P</button>
-      </div>
+      {/* App Header */}
+      <header className="mb-8 text-center">
+        <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-zinc-800 bg-zinc-900/50 text-[11px] font-mono text-zinc-400 mb-3 tracking-wider uppercase">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+          Direct Tab-To-Tab File Transfer Pipe
+        </div>
+        <h1 className="text-3xl font-bold tracking-tight text-zinc-100">
+          Ronin<span className="text-emerald-400 font-mono font-normal">P2P</span>
+        </h1>
+        <p className="text-zinc-500 text-xs mt-1">Serverless, end-to-end file sharing engine.</p>
+      </header>
 
-      //file sharing part of the file
-      <div style={{ marginTop: '20px', padding: '15px', background: '#f9f9f9', borderRadius: '8px' }}>
-        <h3>Share a Local File</h3>
-        <input
-          type="file" onChange={(e) => setSelectedFile(e.target.files[0])}
-          style={{ display: 'block', marginBottom: '10px' }}
-        />
-        {
-          selectedFile && (
-            <p style={{fontSize: '14px', color: '#555'}}>
-              <strong>Selected:</strong> {selectedFile.name} ({(selectedFile.size / 1024 / 1024).toFixed(2)} MB)
-            </p>
-          )
-        }
+      {/* Main Terminal Dashboard Card */}
+      <main className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl p-5 space-y-5">
+        
+        {/* Connection Telemetry Bar (Ping Button Removed) */}
+        <div className="border-b border-zinc-800 pb-3">
+          <span className="text-[10px] font-mono text-zinc-500 block uppercase tracking-wider">System Link Status</span>
+          <span className="text-xs font-semibold text-zinc-300 font-mono">{status}</span>
+        </div>
 
-        <button
-        onClick={handleSendFileHeader} disabled={!selectedFile} 
-        style={{ padding: '8px 16px', background: '#007bff', color: 'white', border: 'none', borderRadius: '4px' }}>
-          Send File
-        </button>
-      </div>
+        {/* Dynamic Space Key Box */}
+        <div className="bg-zinc-950 border border-zinc-800/60 rounded-lg p-4 flex flex-col items-center justify-center text-center space-y-3">
+          <div className="space-y-1">
+            <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-mono block">Active Gateway Key</span>
+            <span className="text-sm font-mono font-bold text-zinc-200 tracking-wide select-all bg-zinc-900 px-3 py-1 rounded border border-zinc-800 block">
+              {roomId}
+            </span>
+          </div>
+          
+          <button
+            onClick={handleShareInvite}
+            className="w-full py-2 bg-emerald-500 hover:bg-emerald-400 active:scale-[0.99] text-zinc-950 font-semibold text-xs font-mono rounded tracking-wide transition-all uppercase"
+          >
+            Generate Invite Link
+          </button>
+        </div>
+
+        {/* Secure Local Dropzone Container */}
+        <div className="space-y-3">
+          <div className="relative border border-dashed border-zinc-800 hover:border-zinc-700 bg-zinc-950/20 rounded-lg p-5 transition-all flex flex-col items-center justify-center text-center cursor-pointer">
+            <input
+              type="file" 
+              onChange={(e) => setSelectedFile(e.target.files[0])}
+              className="absolute inset-0 opacity-0 cursor-pointer"
+            />
+            <span className="text-xs font-mono font-medium text-zinc-400">
+              {selectedFile ? 'Change Target File' : 'Select Local File Payload'}
+            </span>
+            <span className="text-[10px] font-mono text-zinc-600 mt-1">Files remain strictly in local RAM sandbox</span>
+          </div>
+
+          {/* Active Cargo Staging Manifest Card */}
+          {selectedFile && (
+            <div className="bg-zinc-950 border border-zinc-800 p-3 rounded-lg flex items-center justify-between transition-all">
+              <div className="overflow-hidden mr-2">
+                <span className="text-xs font-mono text-zinc-300 block truncate">{selectedFile.name}</span>
+                <span className="text-[10px] text-zinc-500 font-mono block mt-0.5">
+                  {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+                </span>
+              </div>
+              <button
+                onClick={handleSendFileHeader}
+                className="px-3 py-1.5 bg-zinc-100 hover:bg-zinc-200 active:scale-95 text-zinc-950 text-xs font-mono font-bold rounded transition-all tracking-wide uppercase flex-shrink-0"
+              >
+                Dispatch
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Conditional Progress Bar: Only visible on the Sender's side */}
+        {progress > 0 && isSenderProgress && (
+          <div className="bg-zinc-950 border border-zinc-800 p-3 rounded-lg space-y-2">
+            <div className="flex items-center justify-between text-[10px] font-mono tracking-wide">
+              <span className="text-zinc-500 uppercase">Streaming Packet Train</span>
+              <span className="text-emerald-400 font-bold">{progress}%</span>
+            </div>
+            <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-emerald-400 rounded-full transition-all duration-150 ease-out"
+                style={{ width: `${progress}%` }}
+              ></div>
+            </div>
+          </div>
+        )}
+
+      </main>
+
+      {/* Security Signature Footer */}
+      <footer className="mt-8 font-mono text-[9px] text-zinc-600 tracking-widest uppercase">
+        Protected E2EE Data Node Tunnel
+      </footer>
     </div>
   );
 
