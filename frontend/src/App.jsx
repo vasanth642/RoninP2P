@@ -21,6 +21,9 @@ function App(){
   const [progress, setProgress] = useState(0);
   const [isSenderProgress, setIsSenderProgress] = useState(false);
 
+  //ui variables dont care
+  const [isDarkMode, setIsDarkMode] = useState(true);
+
   //variables for handling files
   const incomingFileMetadata = useRef(null);
   const receivedChunkBuffer = useRef([]);
@@ -341,103 +344,189 @@ function App(){
   };
  
  return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-center p-6 font-sans antialiased selection:bg-emerald-500/20 selection:text-emerald-400">
+    <div className="relative min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-center p-4 md:p-8 font-sans antialiased selection:bg-emerald-500/20 selection:text-emerald-400 overflow-x-hidden">
       
-      {/* App Header */}
-      <header className="mb-8 text-center">
-        <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-zinc-800 bg-zinc-900/50 text-[11px] font-mono text-zinc-400 mb-3 tracking-wider uppercase">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-          Direct Tab-To-Tab File Transfer Pipe
-        </div>
-        <h1 className="text-3xl font-bold tracking-tight text-zinc-100">
-          Ronin<span className="text-emerald-400 font-mono font-normal">P2P</span>
-        </h1>
-        <p className="text-zinc-500 text-xs mt-1">Serverless, end-to-end file sharing engine.</p>
-      </header>
+      {/* Technical Canvas Blueprint Background Layer */}
+      <div className="absolute inset-0 bg-[linear-gradient(to_right,#141416_1px,transparent_1px),linear-gradient(to_bottom,#141416_1px,transparent_1px)] bg-[size:3.5rem_3.5rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_50%,#000_80%,transparent_100%)] pointer-events-none"></div>
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[600px] bg-gradient-to-tr from-emerald-500/5 to-cyan-500/3 rounded-full blur-[160px] pointer-events-none"></div>
 
-      {/* Main Terminal Dashboard Card */}
-      <main className="w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl p-5 space-y-5">
+      <div className="relative z-10 flex flex-col items-center justify-center w-full max-w-5xl">
         
-        {/* Connection Telemetry Bar (Ping Button Removed) */}
-        <div className="border-b border-zinc-800 pb-3">
-          <span className="text-[10px] font-mono text-zinc-500 block uppercase tracking-wider">System Link Status</span>
-          <span className="text-xs font-semibold text-zinc-300 font-mono">{status}</span>
-        </div>
-
-        {/* Dynamic Space Key Box */}
-        <div className="bg-zinc-950 border border-zinc-800/60 rounded-lg p-4 flex flex-col items-center justify-center text-center space-y-3">
-          <div className="space-y-1">
-            <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-mono block">Active Gateway Key</span>
-            <span className="text-sm font-mono font-bold text-zinc-200 tracking-wide select-all bg-zinc-900 px-3 py-1 rounded border border-zinc-800 block">
-              {roomId}
-            </span>
+        {/* App Header */}
+        <header className="mb-8 text-center">
+          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-zinc-800 bg-zinc-900/50 text-[11px] font-mono text-zinc-400 mb-3 tracking-wider uppercase">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            Direct Tab-To-Tab File Transfer Pipe
           </div>
-          
-          <button
-            onClick={handleShareInvite}
-            className="w-full py-2 bg-emerald-500 hover:bg-emerald-400 active:scale-[0.99] text-zinc-950 font-semibold text-xs font-mono rounded tracking-wide transition-all uppercase"
-          >
-            Generate Invite Link
-          </button>
-        </div>
+          <h1 className="text-3xl font-bold tracking-tight text-zinc-100">
+            Ronin<span className="text-emerald-400 font-mono font-normal">P2P</span>
+          </h1>
+          <p className="text-zinc-500 text-xs mt-1">Serverless, end-to-end file sharing engine.</p>
+        </header>
 
-        {/* Secure Local Dropzone Container */}
-        <div className="space-y-3">
-          <div className="relative border border-dashed border-zinc-800 hover:border-zinc-700 bg-zinc-950/20 rounded-lg p-5 transition-all flex flex-col items-center justify-center text-center cursor-pointer">
-            <input
-              type="file" 
-              onChange={(e) => setSelectedFile(e.target.files[0])}
-              className="absolute inset-0 opacity-0 cursor-pointer"
-            />
-            <span className="text-xs font-mono font-medium text-zinc-400">
-              {selectedFile ? 'Change Target File' : 'Select Local File Payload'}
-            </span>
-            <span className="text-[10px] font-mono text-zinc-600 mt-1">Files remain strictly in local RAM sandbox</span>
-          </div>
+        {/* Responsive Layout Grid: 1 column on mobile, 2 columns on PC */}
+        <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
 
-          {/* Active Cargo Staging Manifest Card */}
-          {selectedFile && (
-            <div className="bg-zinc-950 border border-zinc-800 p-3 rounded-lg flex items-center justify-between transition-all">
-              <div className="overflow-hidden mr-2">
-                <span className="text-xs font-mono text-zinc-300 block truncate">{selectedFile.name}</span>
-                <span className="text-[10px] text-zinc-500 font-mono block mt-0.5">
-                  {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+          {/* COLUMN 1: Your Exact Main Terminal Dashboard Card */}
+          <main className="w-full bg-zinc-900 border border-zinc-800 rounded-xl shadow-xl p-5 space-y-5">
+            
+            {/* Connection Telemetry Bar (Ping Button Removed) */}
+            <div className="border-b border-zinc-800 pb-3">
+              <span className="text-[10px] font-mono text-zinc-500 block uppercase tracking-wider">System Link Status</span>
+              <span className="text-xs font-semibold text-zinc-300 font-mono">{status}</span>
+            </div>
+
+            {/* Dynamic Space Key Box */}
+            <div className="bg-zinc-950 border border-zinc-800/60 rounded-lg p-4 flex flex-col items-center justify-center text-center space-y-3">
+              <div className="space-y-1">
+                <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-mono block">Active Gateway Key</span>
+                <span className="text-sm font-mono font-bold text-zinc-200 tracking-wide select-all bg-zinc-900 px-3 py-1 rounded border border-zinc-800 block">
+                  {roomId}
                 </span>
               </div>
+              
               <button
-                onClick={handleSendFileHeader}
-                className="px-3 py-1.5 bg-zinc-100 hover:bg-zinc-200 active:scale-95 text-zinc-950 text-xs font-mono font-bold rounded transition-all tracking-wide uppercase flex-shrink-0"
+                onClick={handleShareInvite}
+                className="w-full py-2 bg-emerald-500 hover:bg-emerald-400 active:scale-[0.99] text-zinc-950 font-semibold text-xs font-mono rounded tracking-wide transition-all uppercase"
               >
-                Dispatch
+                Generate Invite Link
               </button>
             </div>
-          )}
+
+            {/* Secure Local Dropzone Container */}
+            <div className="space-y-3">
+              <div className="relative border border-dashed border-zinc-800 hover:border-zinc-700/80 bg-zinc-950/30 hover:bg-zinc-950/60 rounded-xl p-6 transition-all flex flex-col items-center justify-center text-center cursor-pointer group">
+                <input
+                  type="file" 
+                  onChange={(e) => setSelectedFile(e.target.files[0])}
+                  className="absolute inset-0 opacity-0 cursor-pointer z-20"
+                />
+
+                {/* High-Fidelity Stacked File Visual (From image_eab2e7.png) */}
+                <div className="relative h-16 w-16 mb-4 flex items-center justify-center pointer-events-none">
+                  {/* Back Card (Rotated background layer) */}
+                  <div className="absolute inset-0 bg-zinc-800/40 rounded-xl border border-zinc-700/30 rotate-12 scale-95 group-hover:rotate-6 group-hover:translate-y-[-2px] transition-all duration-300"></div>
+                  {/* Front Card (Active layer holding the SVG document icon) */}
+                  <div className="absolute inset-0 bg-zinc-900/90 rounded-xl border border-zinc-700/60 flex items-center justify-center shadow-md backdrop-blur-sm group-hover:scale-105 group-hover:border-zinc-600 transition-all duration-300">
+                    <svg className="h-6 w-6 text-zinc-400 group-hover:text-emerald-400 transition-colors duration-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                    </svg>
+                  </div>
+                </div>
+
+                <span className="text-xs font-mono font-medium text-zinc-400 group-hover:text-zinc-300 transition-colors">
+                  {selectedFile ? 'Change Target File' : 'Select Local File Payload'}
+                </span>
+                <span className="text-[9px] font-mono text-zinc-600 mt-1.5 tracking-wide">Files remain strictly in local RAM sandbox</span>
+              </div>
+
+              {/* Active Cargo Staging Manifest Card */}
+              {selectedFile && (
+                <div className="bg-zinc-950/90 border border-emerald-500/20 p-3.5 rounded-xl flex items-center justify-between shadow-lg animate-slide-in">
+                  <div className="overflow-hidden mr-3">
+                    <span className="text-xs font-mono text-zinc-200 block truncate font-medium">{selectedFile.name}</span>
+                    <span className="text-[9px] text-zinc-500 font-mono block mt-0.5">
+                      {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+                    </span>
+                  </div>
+                  <button
+                    onClick={handleSendFileHeader}
+                    className="px-3.5 py-1.5 bg-zinc-100 hover:bg-zinc-200 active:scale-95 text-zinc-950 text-xs font-mono font-bold rounded-md transition-all tracking-wider uppercase flex-shrink-0 shadow-sm"
+                  >
+                    Dispatch
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Conditional Progress Bar: Only visible on the Sender's side */}
+            {progress > 0 && isSenderProgress && (
+              <div className="bg-zinc-950 border border-zinc-800 p-3 rounded-lg space-y-2">
+                <div className="flex items-center justify-between text-[10px] font-mono tracking-wide">
+                  <span className="text-zinc-500 uppercase">Streaming Packet Train</span>
+                  <span className="text-emerald-400 font-bold">{progress}%</span>
+                </div>
+                <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-emerald-400 rounded-full transition-all duration-150 ease-out"
+                    style={{ width: `${progress}%` }}
+                  ></div>
+                </div>
+              </div>
+            )}
+
+          </main>
+
+          {/* COLUMN 2: Tech Diagnostics Panel (Fills screen on PC, stacks below on mobile) */}
+          <section className="w-full bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-5 flex flex-col justify-between self-stretch shadow-xl">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                <span className="text-[10px] font-mono text-zinc-400 uppercase tracking-widest font-semibold flex items-center gap-1.5">
+                  <span className="h-1 w-1 bg-cyan-400 rounded-full animate-ping"></span>
+                  P2P Diagnostics Terminal
+                </span>
+                <span className="text-[9px] font-mono text-zinc-600 bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800">
+                  v1.0.0
+                </span>
+              </div>
+
+              {/* Matrix Telemetry Specs Grid */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-zinc-950 border border-zinc-800/60 p-3 rounded-lg font-mono">
+                  <span className="text-[9px] text-zinc-500 block uppercase tracking-wider">Connection Protocol</span>
+                  <span className="text-xs text-zinc-300 font-medium block mt-1">WebRTC DataChannel</span>
+                </div>
+                <div className="bg-zinc-950 border border-zinc-800/60 p-3 rounded-lg font-mono">
+                  <span className="text-[9px] text-zinc-500 block uppercase tracking-wider">Encryption Mode</span>
+                  <span className="text-xs text-emerald-400 font-medium block mt-1">DTLS (Native E2EE)</span>
+                </div>
+                <div className="bg-zinc-950 border border-zinc-800/60 p-3 rounded-lg font-mono">
+                  <span className="text-[9px] text-zinc-500 block uppercase tracking-wider">Network Architecture</span>
+                  <span className="text-xs text-cyan-400 font-medium block mt-1">Pure Peer-To-Peer</span>
+                </div>
+                <div className="bg-zinc-950 border border-zinc-800/60 p-3 rounded-lg font-mono">
+                  <span className="text-[9px] text-zinc-500 block uppercase tracking-wider">Signaling Layer</span>
+                  <span className="text-xs text-zinc-300 font-medium block mt-1">Socket.io Broker</span>
+                </div>
+              </div>
+
+              {/* Technical Operation Instructions */}
+              <div className="bg-zinc-950 border border-zinc-800/40 rounded-lg p-3.5 space-y-2.5">
+                <span className="text-[10px] font-mono text-zinc-400 block uppercase tracking-wider font-semibold">Node Pipeline Mechanics</span>
+                <ul className="space-y-1.5 text-[11px] font-mono text-zinc-500 list-none pl-0">
+                  <li className="flex items-start gap-2">
+                    <span className="text-emerald-400 select-none">&rarr;</span>
+                    <span>Generates a secure workspace string on local tab assembly.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-emerald-400 select-none">&rarr;</span>
+                    <span>Passes local SDP offers via discovery server to resolve NAT traversal targets.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-emerald-400 select-none">&rarr;</span>
+                    <span>Streams target arrays down an isolated packet line directly into browser RAM.</span>
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            {/* Micro Hardware Security Stamp */}
+            <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-center flex items-center justify-between font-mono text-[9px] text-zinc-500">
+              <span className="uppercase tracking-wider">Memory Cache State:</span>
+              <span className="text-emerald-400 font-bold bg-emerald-500/5 px-2 py-0.5 rounded border border-emerald-500/10">0 Bytes Cached (Pure Memory)</span>
+            </div>
+          </section>
+
         </div>
 
-        {/* Conditional Progress Bar: Only visible on the Sender's side */}
-        {progress > 0 && isSenderProgress && (
-          <div className="bg-zinc-950 border border-zinc-800 p-3 rounded-lg space-y-2">
-            <div className="flex items-center justify-between text-[10px] font-mono tracking-wide">
-              <span className="text-zinc-500 uppercase">Streaming Packet Train</span>
-              <span className="text-emerald-400 font-bold">{progress}%</span>
-            </div>
-            <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
-              <div 
-                className="h-full bg-emerald-400 rounded-full transition-all duration-150 ease-out"
-                style={{ width: `${progress}%` }}
-              ></div>
-            </div>
-          </div>
-        )}
-
-      </main>
+      </div>
 
       {/* Security Signature Footer */}
       <footer className="mt-8 font-mono text-[9px] text-zinc-600 tracking-widest uppercase">
         Protected E2EE Data Node Tunnel
       </footer>
     </div>
-  );
+);
 
 }
 
