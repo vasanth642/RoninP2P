@@ -21,6 +21,8 @@ function App() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [progress, setProgress] = useState(0);
   const [isSenderProgress, setIsSenderProgress] = useState(false);
+  const [filePrompt, setFilePrompt] = useState(false);
+
 
   //ui variables dont care
   const [isDarkMode, setIsDarkMode] = useState(true);
@@ -41,8 +43,14 @@ function App() {
 
   //variables for handling files
   const incomingFileMetadata = useRef(null);
-  const receivedChunkBuffer = useRef([]);
   const byteReceivedCount = useRef(0);
+  const fileWritableStreamRef = useRef(null);
+
+  const activeSendingFileRef = useRef(null);
+
+  //specific file handling ref hooks for firefox
+  const firefoxBufferRef = useRef([]);
+  const isFirefoxBlobFallback = useRef(false);
 
   {/*
     -> socketRef holds instance of an active socket.io-client that has a open 
@@ -64,8 +72,64 @@ function App() {
 
   const roomIdRef = useRef("");
 
+  //this part is for setting up the file System access API  when the receiver receives a alert from the sender about the incoming file.
+  const handleAcceptFileRequest = async () => {
+    if (!incomingFileMetadata.current) return;
+
+    setFilePrompt(false);
+    byteReceivedCount.current = 0;
+    setIsSenderProgress(false);
+    isFirefoxBlobFallback.current = false;
+
+    //file limit for firefox(this is the variable responsible for that purpose)
+    //basically (200 MB)
+    const FILE_SIZE_LIMIT_200MB = 200 * 1024 * 1024;
+
+    if (typeof window.showSaveFilePicker !== 'function') {
+      if (incomingFileMetadata.current.size > FILE_SIZE_LIMIT_200MB) {
+        alert(
+          `File Size Warning: ${(incomingFileMetadata.current.size / 1024 / 1024).toFixed(1)} MB\n\n` +
+          "Firefox does not support direct-to-disk streaming. Large file transports require Chrome, Edge, or Brave.\n" +
+          "Please reopen this link in a Chromium browser to proceed safely."
+        );
+        incomingFileMetadata.current = null;
+        setStatus("Rejected: File too large for firefox memory.");
+        setProgress(0);
+        return;
+      }
+
+      isFirefoxBlobFallback.current = true;
+      firefoxBufferRef.current = [];
+
+      const acceptanceSignal = { type: 'FILE_ACCEPTED' };
+      dataChannelRef.current.send(JSON.stringify(acceptanceSignal));
+      setStatus('Downloading to memory buffer...');
+      return;
+    }
+
+    try {
+      const options = {
+        suggestedName: incomingFileMetadata.current.name,
+      };
+
+      const fileHandle = await window.showSaveFilePicker(options);
+      fileWritableStreamRef.current = await fileHandle.createWritable();
+
+      const acceptanceSignal = { type: 'FILE_ACCEPTED' };
+      dataChannelRef.current.send(JSON.stringify(acceptanceSignal));
+      setStatus('Streaming packets directly to disk...');
+    } catch (err) {
+      console.log("USer denied storage access or stream creation failed:", err);
+      alert("you must select a location to save the the file");
+      setProgress(0);
+      incomingFileMetadata.current = null;
+      setStatus("Disconnected");
+    }
+  };
+
   const setupDataChannelListeners = () => {
     dataChannelRef.current.binaryType = 'arraybuffer';
+    dataChannelRef.current.bufferedAmountLowThreshold = 1024 * 1024 * 4;
 
     dataChannelRef.current.onopen = () => {
       setStatus("Connected P2P (WebRTC Direct)");
@@ -75,11 +139,23 @@ function App() {
       if (typeof event.data === 'string') {
         try {
           const message = JSON.parse(event.data);
-          if (message.type === 'header') {
+          if (message.type === 'FILE_REQUEST') {
             incomingFileMetadata.current = message;
-            receivedChunkBuffer.current = [];
+            setFilePrompt(true);
             byteReceivedCount.current = 0;
             setStatus(`Incoming file payload: ${message.name}`);
+            return;
+          }
+
+          if (message.type === 'FILE_ACCEPTED') {
+
+            const fileToStream = activeSendingFileRef.current;
+            if (!fileToStream) {
+              setStatus("Error: File reference lost.");
+              return;
+            }
+            setStatus(`Peer accepted request. Streaming ${fileToStream.name}...`);
+            streamFileChunks(fileToStream);
             return;
           }
         } catch (err) {
@@ -88,22 +164,56 @@ function App() {
       }
 
       if (event.data instanceof ArrayBuffer) {
-        if (!incomingFileMetadata.current) {
+        if (!incomingFileMetadata.current || (!fileWritableStreamRef.current && !isFirefoxBlobFallback.current)) {
           return;
         }
 
-        receivedChunkBuffer.current.push(event.data);
-        byteReceivedCount.current += event.data.byteLength;
-        console.log(`Received chunk: Progress ${byteReceivedCount.current} / ${incomingFileMetadata.current.size} bytes`);
+        if (isFirefoxBlobFallback.current) {
+          firefoxBufferRef.current.push(event.data);
+        } else if (fileWritableStreamRef.current) {
+          fileWritableStreamRef.current.write(event.data);
+        } else {
+          return;
+        }
 
-        //receiver progress loading part:
-        setIsSenderProgress(false);
+        byteReceivedCount.current += event.data.byteLength;
+
+        //calculating raw MB amount of the file
+        const receivedMB = (byteReceivedCount.current) / (1024 * 1024).toFixed(1);
+        const totalMB = (incomingFileMetadata.current.size / (1024 * 1024)).toFixed(1);
+
         const pct = Math.round((byteReceivedCount.current / incomingFileMetadata.current.size) * 100);
         setProgress(pct);
+        setStatus(`Downloading: ${receivedMB} MB / ${totalMB}`);
 
         if (byteReceivedCount.current >= incomingFileMetadata.current.size) {
-          setStatus(`file assembly complete! Triggering download...`);
-          triggerFileDownload();
+          if (isFirefoxBlobFallback.current) {
+            // Firefox Assembler Logic: Recombine array items out of memory cache
+            const fileBlob = new Blob(firefoxBufferRef.current, {
+              type: incomingFileMetadata.current.mimeType || 'application/octet-stream'
+            });
+            const downloadUrl = URL.createObjectURL(fileBlob);
+
+            const link = document.createElement('a');
+            link.href = downloadUrl;
+            link.download = incomingFileMetadata.current.name;
+            document.body.appendChild(link);
+            link.click();
+
+            // Garbage collect memory pointers immediately
+            document.body.removeChild(link);
+            URL.revokeObjectURL(downloadUrl);
+            firefoxBufferRef.current = [];
+            isFirefoxBlobFallback.current = false;
+          } else if (fileWritableStreamRef.current) {
+            // Chromium System Stream Cleanup
+            fileWritableStreamRef.current.close();
+            fileWritableStreamRef.current = null;
+          }
+
+          setStatus("File saved successfully directly to your drive!");
+          incomingFileMetadata.current = null;
+          setProgress(0);
         }
       }
     };
@@ -271,62 +381,42 @@ function App() {
     }
   }
 
-  ///this function below handles downloading files
-  const triggerFileDownload = () => {
-    if (!incomingFileMetadata.current) {
-      return;
+  //this function will slice the file into smaller chunks and send them over the data channel
+  const streamFileChunks = async (fileToStream) => {
+    // 16KB chunk
+    let currentOffset = 0;
+    const CHUNK_SIZE = 16384;
+    const HIGH_WATERMARK = 1024 * 1024 * 16;
+    while (currentOffset < fileToStream.size) {
+      if (dataChannelRef.current.bufferedAmount > HIGH_WATERMARK) {
+        await new Promise((resolve) => {
+          dataChannelRef.current.onbufferedamountlow = () => {
+            dataChannelRef.current.onbufferedamountlow = null;
+            resolve();
+          };
+        });
+      }
+
+      const sliceStart = currentOffset;
+      const sliceEnd = Math.min(currentOffset + CHUNK_SIZE, fileToStream.size);
+      const fileBlobSlice = fileToStream.slice(sliceStart, sliceEnd);
+
+      const arrayBuffer = await fileBlobSlice.arrayBuffer();
+
+      dataChannelRef.current.send(arrayBuffer);
+      currentOffset += arrayBuffer.byteLength;
+
+      const sentMB = (currentOffset / (1024 * 1024)).toFixed(1);
+      const totalMB = (fileToStream.size / (1024 * 1024)).toFixed(1);
+
+      const pct = Math.floor((currentOffset / fileToStream.size) * 100);
+      setProgress(pct);
+      setStatus(`uploading: ${sentMB} MB / ${totalMB} MB`);
     }
 
-    const fileBlob = new Blob(receivedChunkBuffer.current, { type: incomingFileMetadata.current.mimeType });
-    const downloadUrl = URL.createObjectURL(fileBlob);
 
-    const linkNode = document.createElement('a');
-    linkNode.href = downloadUrl;
-    linkNode.download = incomingFileMetadata.current.name;
-    document.body.appendChild(linkNode);
-    linkNode.click();
-    document.body.removeChild(linkNode);
-    URL.revokeObjectURL(downloadUrl);
+    setStatus("File sent successfully to peer device!");
 
-    incomingFileMetadata.current = null;
-    receivedChunkBuffer.current = [];
-    byteReceivedCount.current = 0;
-
-    setStatus('File download complete!');
-    setProgress(0);
-  }
-
-  //this function will slice the file into smaller chunks and send them over the data channel
-  const streamFileChunks = (file) => {
-    const fileReader = new FileReader();
-    let currentOffset = 0;
-    const CHUNK_SIZE = 16384; // 16KB chunks
-
-    fileReader.onload = (e) => {
-      const bufferSlice = e.target.result;
-      dataChannelRef.current.send(bufferSlice);
-      currentOffset += bufferSlice.byteLength;
-
-      //sender progress loading part:
-      setIsSenderProgress(true);
-      const pct = Math.floor((currentOffset / file.size) * 100);
-      setProgress(pct);
-
-      if (currentOffset < file.size) {
-        loadNextChunkSlice();
-      } else {
-        setStatus(`File sent fully`);
-      }
-    };
-
-    const loadNextChunkSlice = () => {
-      const sliceStart = currentOffset;
-      const sliceEnd = Math.min(currentOffset + CHUNK_SIZE, file.size);
-      const fileBlobSlice = file.slice(sliceStart, sliceEnd);
-      fileReader.readAsArrayBuffer(fileBlobSlice);
-    };
-
-    loadNextChunkSlice();
   }
 
 
@@ -335,18 +425,19 @@ function App() {
       return alert("P2P tunnel is not open yet");
     }
 
-    const headerInfo = {
-      type: 'header',
+    activeSendingFileRef.current = selectedFile;
+
+    const fileRequest = {
+      type: 'FILE_REQUEST',
       name: selectedFile.name,
       size: selectedFile.size,
       mimeType: selectedFile.type
     };
 
-    dataChannelRef.current.send(JSON.stringify(headerInfo));
+    dataChannelRef.current.send(JSON.stringify(fileRequest));
+    console.log("File request handshake sent to peer:", fileRequest);
 
-    console.log("Metadata manifest handshake dispatched over the pipe", headerInfo);
-    setStatus(`Streaming the file: ${selectedFile.name}...`);
-    streamFileChunks(selectedFile);
+    setStatus(`Waiting for peer to accept : ${selectedFile.name}`);
   }
 
   //this function helps tpo generate random room names
@@ -359,214 +450,236 @@ function App() {
   };
 
   return (
-  <div className="relative min-h-screen bg-zinc-950 text-zinc-100 font-sans antialiased selection:bg-white/10 selection:text-white overflow-x-hidden scroll-smooth">
-    
-    {/* Deep Premium Ambient Background Glow */}
-    <div className="absolute top-1/4 left-1/4 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-zinc-800/[0.03] rounded-full blur-[120px] pointer-events-none z-0"></div>
+  <div className="relative min-h-screen bg-zinc-950 text-zinc-100 font-sans antialiased selection:bg-indigo-500/20 selection:text-indigo-400 overflow-x-hidden scroll-smooth">
 
-    {/* SECTION 1: PREMIUM MARKETING LANDING VIEW */}
-    <section className="relative min-h-screen w-full flex items-center justify-center p-4 md:p-12 z-10 border-b border-zinc-900/50">
-      
-      {/* ACETERNITY GLOBE MOUNT LAYER */}
-      <div className="absolute bottom-0 right-0 md:bottom-[-5%] md:right-[-5%] w-full md:w-[50vw] h-[50vh] md:h-[85vh] opacity-30 md:opacity-45 pointer-events-none select-none overflow-hidden z-0">
+    {/* Premium Grid Texture Overlay */}
+    <div className="absolute inset-0 bg-[linear-gradient(to_right,#18181b_1px,transparent_1px),linear-gradient(to_bottom,#18181b_1px,transparent_1px)] bg-[size:4rem_4rem] opacity-80 pointer-events-none z-0"></div>
+
+    {/* Amplified Atmospheric Radial Color Glows - Richer Secondary Color Presets */}
+    <div className="absolute top-[-10%] left-1/4 w-[800px] h-[800px] bg-indigo-600/[0.08] rounded-full blur-[160px] pointer-events-none z-0"></div>
+    <div className="absolute bottom-10 right-1/4 w-[800px] h-[800px] bg-violet-500/[0.06] rounded-full blur-[160px] pointer-events-none z-0"></div>
+
+    {/* SECTION 1: PREMIUM HERO VIEW */}
+    <section className="relative min-h-screen w-full flex items-center justify-center p-6 md:px-20 z-10 border-b border-zinc-900">
+
+      {/* NATIVE GLOBE RENDERING LAYER - Shifted right and vertically balanced to prevent left column collisions */}
+      <div className="hidden lg:block absolute top-1/2 -translate-y-1/2 right-[-2%] w-[45vw] h-[80vh] opacity-35 pointer-events-none select-none overflow-hidden z-0">
         <div id="aceternity-globe-surface" className="w-full h-full relative flex items-center justify-center">
           <Globe />
-          <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-transparent to-transparent"></div>
         </div>
       </div>
 
-      {/* Main Structural Layout Grid for Landing Content */}
-      <div className="relative w-full max-w-6xl grid grid-cols-1 md:grid-cols-12 gap-8 items-center z-10">
-        
-        {/* Main Copy Deck Frame */}
-        <div className="md:col-span-7 flex flex-col justify-center space-y-8 text-left pt-6">
+      {/* Main Structural Layout Grid */}
+      <div className="relative w-full max-w-7xl grid grid-cols-1 lg:grid-cols-12 gap-12 items-center z-10 pt-4 md:pt-0">
 
-          <h1 className="text-4xl md:text-6xl font-semibold tracking-tight leading-[1.15] text-zinc-100">
-            Share files globally. <br />
-            <span className="bg-gradient-to-r from-zinc-100 via-zinc-200 to-zinc-400 bg-clip-text text-transparent">
-              Directly to your peers.
-            </span>
-          </h1>
+        {/* Left Typography Frame */}
+        <div className="lg:col-span-7 flex flex-col justify-center space-y-10 text-left">
 
-          <p className="text-sm md:text-base text-zinc-400 max-w-xl font-normal leading-relaxed">
-            Eliminate intermediary storage servers. Establish real-time data channels directly from device to device with absolute encryption security, unlimited payload bounds, and zero infrastructure overhead.
-          </p>
+          <div className="space-y-6">
+            {/* Project Brand Label - Elevated layout hierarchy and text scale */}
+            <div className="text-xl tracking-[0.25em] font-mono uppercase font-bold text-indigo-400 sm:text-3xl">
+              Ronin P2P
+            </div>
 
-          {/* Premium 3-Step Interactive Cards Grid - Upscaled text and borders */}
-          <div className="pt-2 grid grid-cols-1 md:grid-cols-3 gap-5">
-            
-            {/* Card 1 */}
-            <div className="relative p-6 rounded-xl border border-zinc-800/60 bg-zinc-900/10 backdrop-blur-sm transition-all duration-300 hover:border-zinc-700 hover:bg-zinc-900/20 hover:-translate-y-1 group">
-              {/* Card Badge Icon Ring */}
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-300 mb-4 transition-colors group-hover:border-zinc-700">
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-                </svg>
-              </div>
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold text-zinc-200 tracking-wide">Initialize & Share</h4>
-                <p className="text-xs text-zinc-500 font-normal leading-relaxed">Generate a secure workspace link and transmit it directly to a remote peer.</p>
+            <h1 className="text-3xl sm:text-3xl md:text-5xl font-extrabold tracking-tight leading-[1.1] text-white">
+              Direct Peer-to-Peer <br />
+              File Sharing Platform
+            </h1>
+
+            <p className="text-base md:text-lg text-zinc-400 max-w-xl font-normal leading-relaxed tracking-wide">
+              Bypass intermediate storage completely. Open native, memory-safe data streams straight onto your peer's drive with full hardware acceleration and unlimited allocation limits.
+            </p>
+          </div>
+
+          {/* Grid of Specialized Capabilities - Expanded Card Dimensions and Font Hierarchies */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 w-full pt-2">
+
+            {/* Capability 1 */}
+            <div className="relative p-6 min-h-[220px] flex flex-col justify-between rounded-xl border border-zinc-800/80 bg-zinc-900/10 backdrop-blur-md transition-all duration-300 hover:border-zinc-700 hover:bg-zinc-900/30 group">
+              <div>
+                <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950 text-indigo-400 mb-5 shadow-sm">
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 00-5.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+                  </svg>
+                </div>
+                <h4 className="text-base font-semibold text-zinc-200 tracking-wide">Secure Discovery</h4>
+                <p className="text-sm text-zinc-400 mt-2 leading-relaxed">Exchange structural signaling blueprints via isolated room coordinate channels.</p>
               </div>
             </div>
 
-            {/* Card 2 */}
-            <div className="relative p-6 rounded-xl border border-zinc-800/60 bg-zinc-900/10 backdrop-blur-sm transition-all duration-300 hover:border-zinc-700 hover:bg-zinc-900/20 hover:-translate-y-1 group">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-300 mb-4 transition-colors group-hover:border-zinc-700">
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.536 9.636a3 3 0 000 4.728m2.828-7.556a7 7 0 000 10.384M12 13a1 1 0 100-2 1 1 0 000 2z" />
-                </svg>
-              </div>
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold text-zinc-200 tracking-wide">Establish Connection</h4>
-                <p className="text-xs text-zinc-500 font-normal leading-relaxed">Wait for the lightweight signaling pipeline to link your browser runtimes.</p>
+            {/* Capability 2 */}
+            <div className="relative p-6 min-h-[220px] flex flex-col justify-between rounded-xl border border-zinc-800/80 bg-zinc-900/10 backdrop-blur-md transition-all duration-300 hover:border-zinc-700 hover:bg-zinc-900/30 group">
+              <div>
+                <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950 text-indigo-400 mb-5 shadow-sm">
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+                  </svg>
+                </div>
+                <h4 className="text-base font-semibold text-zinc-200 tracking-wide">Dynamic Routing</h4>
+                <p className="text-sm text-zinc-400 mt-2 leading-relaxed">Dynamic memory allocation handles low and high volume tracking conditions automatically.</p>
               </div>
             </div>
 
-            {/* Card 3 */}
-            <div className="relative p-6 rounded-xl border border-zinc-800/60 bg-zinc-900/10 backdrop-blur-sm transition-all duration-300 hover:border-zinc-700 hover:bg-zinc-900/20 hover:-translate-y-1 group">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-300 mb-4 transition-colors group-hover:border-zinc-700">
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
-                </svg>
-              </div>
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold text-zinc-200 tracking-wide">Stream Cargo</h4>
-                <p className="text-xs text-zinc-500 font-normal leading-relaxed">Dispatch payloads straight into safe client-side RAM sandbox channels.</p>
+            {/* Capability 3 */}
+            <div className="relative p-6 min-h-[220px] flex flex-col justify-between rounded-xl border border-zinc-800/80 bg-zinc-900/10 backdrop-blur-md transition-all duration-300 hover:border-zinc-700 hover:bg-zinc-900/30 group">
+              <div>
+                <div className="flex h-11 w-11 items-center justify-center rounded-lg border border-zinc-800 bg-zinc-950 text-indigo-400 mb-5 shadow-sm">
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 4H6a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-2m-4-1v8m0 0l3-3m-3 3L9 8m-5 5h2.586a1 1 0 01.707.293l2.414 2.414a1 1 0 00.707.293h3.172a1 1 0 00.707-.293l2.414-2.414a1 1 0 01.707-.293H20" />
+                  </svg>
+                </div>
+                <h4 className="text-base font-semibold text-zinc-200 tracking-wide">Direct Pipeline</h4>
+                <p className="text-sm text-zinc-400 mt-2 leading-relaxed">Stream data packages directly to storage without cloud payload ceilings.</p>
               </div>
             </div>
 
           </div>
 
-          {/* Action Trigger Interface Layout Deck - Expanded button sizes */}
-          <div className="pt-4 flex flex-wrap items-center gap-4">
+          {/* Action Call Controls - Optimized structural padding bounds to sit cleanly within view */}
+          <div className="pt-4 flex flex-wrap items-center gap-5">
             <button
               onClick={handleScrollToTool}
-              className="px-7 py-3.5 bg-zinc-100 hover:bg-zinc-200 active:scale-[0.98] text-zinc-950 font-medium text-sm rounded-lg tracking-wide transition-all shadow-md"
+              className="px-10 py-4.5 bg-indigo-600 hover:bg-indigo-500 active:scale-[0.98] text-white font-bold text-base rounded-xl tracking-wide transition-all duration-200 shadow-[0_4px_24px_rgba(99,102,241,0.25)]"
             >
-              Get Started
+              Launch Console
             </button>
             <a 
               href="https://github.com" 
               target="_blank" 
               rel="noopener noreferrer"
-              className="px-7 py-3.5 border border-zinc-800 bg-zinc-900/20 hover:bg-zinc-900/50 font-medium text-sm rounded-lg tracking-wide text-zinc-300 transition-all flex items-center gap-2"
+              className="px-10 py-4.5 border border-zinc-800 bg-zinc-900/30 hover:bg-zinc-900/60 hover:border-zinc-700 font-bold text-base rounded-xl tracking-wide text-zinc-300 transition-all duration-200 flex items-center gap-2.5"
             >
-              Technical Source
+              Explore Repository
             </a>
           </div>
 
         </div>
 
-        <div className="hidden md:block md:col-span-5"></div>
+        <div className="hidden lg:block lg:col-span-5"></div>
       </div>
     </section>
 
-    {/* SECTION 2: APPLICATION ENGINE WORKSPACE CONTAINER */}
+    {/* SECTION 2: RUNTIME CONSOLE WORKSPACE */}
     <section 
       id="p2p-terminal-deck" 
-      className="relative min-h-screen w-full flex flex-col items-center justify-center p-4 md:p-8 z-10 bg-zinc-950"
+      className="relative min-h-screen w-full flex flex-col items-center justify-center p-6 md:p-12 z-10 bg-zinc-950"
     >
-      <div className="relative z-10 w-full max-w-xl flex flex-col items-center">
+      <div className="relative w-full max-w-3xl flex flex-col items-center space-y-8">
         
-        {/* Workspace Mini Title Block */}
-        <header className="mb-6 text-center">
-          <h2 className="text-xl font-medium tracking-tight text-zinc-200">
-            RoninP2P Utility Hub
+        <header className="text-center">
+          <h2 className="text-3xl font-bold tracking-tight bg-gradient-to-b from-white to-zinc-400 bg-clip-text text-transparent">
+            Ronin Console
           </h2>
-          <p className="text-zinc-500 text-[11px] font-normal tracking-wide mt-1">
-            Active Workspace Sandbox Environment
-          </p>
         </header>
 
-        {/* Core Control Dashboard Box Asset */}
-        <main className="w-full bg-zinc-900/40 border border-zinc-900 rounded-2xl shadow-2xl p-6 space-y-6 transition-all">
-          
-          {/* Connection Telemetry Bar */}
-          <div className="border-b border-zinc-800/60 pb-3 flex items-center justify-between">
-            <div>
-              <span className="text-[10px] text-zinc-500 block uppercase tracking-wider font-medium">System Link Status</span>
-              <span className="text-xs font-medium text-zinc-300">{status}</span>
+        {/* Core Main Control Deck Card Layout */}
+        <main className="w-full bg-zinc-900/20 border border-zinc-800 rounded-2xl p-6 md:p-8 backdrop-blur-xl relative overflow-hidden shadow-[0_32px_64px_-16px_rgba(0,0,0,0.8)]">
+          <div className="absolute top-0 inset-x-0 h-[1px] bg-gradient-to-r from-transparent via-indigo-500/20 to-transparent"></div>
+
+          {/* Top Real-time Status Strip */}
+          <div className="border-b border-zinc-800/80 pb-4 flex items-center justify-between relative z-10">
+            <div className="space-y-1 text-left">
+              <span className="text-[10px] text-zinc-500 block uppercase tracking-widest font-mono font-bold">STATUS</span>
+              <div className="flex items-center gap-2">
+                <span className={`h-2 w-2 rounded-full ${status.includes('Connected') ? 'bg-indigo-500 animate-pulse shadow-[0_0_8px_rgba(99,102,241,0.5)]' : 'bg-zinc-600'}`}></span>
+                <span className="text-sm font-semibold tracking-wide text-zinc-200 font-mono">{status}</span>
+              </div>
             </div>
-            <div className={`h-2 w-2 rounded-full ${status.includes('Connected') ? 'bg-zinc-400' : 'bg-zinc-800'}`}></div>
           </div>
 
-          {/* Dynamic Space Key Box */}
-          <div className="bg-zinc-950 border border-zinc-900 rounded-xl p-4 flex flex-col items-center justify-center text-center space-y-3.5">
-            <div className="space-y-1.5 w-full">
-              <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium block">Active Gateway Key</span>
-              <span className="text-sm font-medium text-zinc-300 select-all bg-zinc-900/40 px-3 py-1.5 rounded-lg border border-zinc-800/40 block">
-                {roomId}
-              </span>
-            </div>
+          {/* Core Operations Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-8 pt-6 relative z-10">
             
-            <button
-              onClick={handleShareInvite}
-              className="w-full py-2.5 bg-zinc-100 hover:bg-zinc-200 active:scale-[0.99] text-zinc-950 font-medium text-xs rounded-lg tracking-wide transition-all"
-            >
-              Generate Invite Link
-            </button>
-          </div>
-
-          {/* Secure Local Dropzone Container */}
-          <div className="space-y-3">
-            <div className="relative border border-dashed border-zinc-800 hover:border-zinc-700 bg-zinc-950/20 hover:bg-zinc-950/40 rounded-xl p-6 transition-all flex flex-col items-center justify-center text-center cursor-pointer group">
-              <input
-                type="file" 
-                onChange={(e) => setSelectedFile(e.target.files[0])}
-                className="absolute inset-0 opacity-0 cursor-pointer z-20"
-              />
-
-              {/* Stacked File Layout Visual */}
-              <div className="relative h-14 w-14 mb-4 flex items-center justify-center pointer-events-none">
-                <div className="absolute inset-0 bg-zinc-800/20 rounded-xl border border-zinc-800/30 rotate-12 scale-95 group-hover:rotate-6 group-hover:translate-y-[-2px] transition-all duration-300"></div>
-                <div className="absolute inset-0 bg-zinc-900/60 rounded-xl border border-zinc-800 flex items-center justify-center shadow-md backdrop-blur-sm group-hover:scale-105 transition-all duration-300">
-                  <svg className="h-5 w-5 text-zinc-500 group-hover:text-zinc-300 transition-colors duration-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-                  </svg>
+            {/* Left Controller: Keys & Invitations */}
+            <div className="md:col-span-5 flex flex-col justify-between space-y-4 text-left">
+              <div className="space-y-2">
+                <label className="text-[10px] text-zinc-500 block uppercase tracking-widest font-mono font-bold">YOUR ROOM CODE</label>
+                <div className="font-mono text-xs font-semibold text-indigo-400 select-all bg-zinc-950 border border-zinc-800 px-4 py-3 rounded-xl tracking-wider text-center shadow-inner group transition-all duration-200 hover:border-indigo-500/30">
+                  {roomId || "SYNCHRONIZING..."}
                 </div>
               </div>
-
-              <span className="text-xs font-medium text-zinc-400 group-hover:text-zinc-200 transition-colors">
-                {selectedFile ? 'Change Target File' : 'Select Local File Payload'}
-              </span>
-              <span className="text-[10px] text-zinc-600 mt-1.5 tracking-wide">Files remain strictly in local RAM sandbox</span>
+              
+              <button
+                onClick={handleShareInvite}
+                className="w-full py-3 bg-zinc-100 hover:bg-white active:scale-[0.99] text-zinc-950 font-bold text-xs rounded-xl tracking-wide shadow-md transition-all duration-150 font-mono"
+              >
+                SHARE INVITE LINK
+              </button>
             </div>
 
-            {/* Active Cargo Staging Manifest Card */}
-            {selectedFile && (
-              <div className="bg-zinc-950 border border-zinc-900 p-4 rounded-xl flex items-center justify-between shadow-xl">
-                <div className="overflow-hidden mr-3">
-                  <span className="text-xs text-zinc-300 block truncate font-medium">{selectedFile.name}</span>
-                  <span className="text-[10px] text-zinc-500 block mt-1">
-                    {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
-                  </span>
+            {/* Right Controller: Input Staging Gateway */}
+            <div className="md:col-span-7 flex flex-col justify-center">
+              <div className="relative border border-dashed border-zinc-800 bg-zinc-950/40 rounded-xl p-6 transition-all duration-300 flex flex-col items-center justify-center text-center cursor-pointer group hover:bg-zinc-900/10 hover:border-indigo-500/20 shadow-inner">
+                <input
+                  type="file" 
+                  onChange={(e) => setSelectedFile(e.target.files[0])}
+                  className="absolute inset-0 opacity-0 cursor-pointer z-20"
+                />
+
+                <div className="h-12 w-12 mb-3 flex items-center justify-center pointer-events-none transition-all duration-300 group-hover:scale-105">
+                  <div className="absolute h-10 w-10 bg-zinc-900 rounded-lg border border-zinc-800 flex items-center justify-center shadow-md text-zinc-400 group-hover:text-indigo-400 group-hover:border-indigo-500/30 transition-all duration-300">
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                    </svg>
+                  </div>
                 </div>
-                <div className="overflow-hidden mr-3">
-                  <span className="text-xs text-zinc-300 block truncate font-medium">{selectedFile.name}</span>
-                  <span className="text-[10px] text-zinc-500 block mt-1">
-                    {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
-                  </span>
-                </div>
-                <button
-                  onClick={handleSendFileHeader}
-                  className="px-4 py-2 bg-zinc-100 hover:bg-zinc-200 active:scale-95 text-zinc-950 text-xs font-medium rounded-lg transition-all shadow-md"
-                >
-                  Dispatch
-                </button>
+
+                <span className="text-xs font-bold font-mono tracking-wide text-zinc-400 group-hover:text-zinc-200 transition-colors duration-200">
+                  {selectedFile ? 'CHANGE SELECTED FILE' : 'SELECT FILE TO SEND'}
+                </span>
               </div>
-            )}
+            </div>
+
           </div>
 
-          {/* Conditional Progress Bar Block */}
-          {progress > 0 && isSenderProgress && (
-            <div className="bg-zinc-950 border border-zinc-900 p-4 rounded-xl space-y-2.5">
-              <div className="flex items-center justify-between text-[10px] tracking-wide">
-                <span className="text-zinc-500 font-medium">Streaming Packet Train</span>
-                <span className="text-zinc-300 font-medium">{progress}%</span>
+          {/* Dynamic Row A: Sender Asset Awaiting Dispatch */}
+          {selectedFile && !status.includes("uploading") && !status.includes("Streaming") && (
+            <div className="relative bg-zinc-950/80 border border-zinc-800 p-4 rounded-xl flex items-center justify-between shadow-inner mt-6 animate-fadeIn text-left">
+              <div className="overflow-hidden mr-4">
+                <span className="text-xs font-bold text-zinc-400 font-mono uppercase tracking-wider block">SELECTED FILE</span>
+                <span className="text-sm text-zinc-100 block truncate font-semibold mt-0.5 tracking-wide">{selectedFile.name}</span>
+                <span className="text-[10px] text-zinc-500 block mt-1 font-mono">
+                  {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+                </span>
               </div>
-              <div className="w-full h-1 bg-zinc-900 rounded-full overflow-hidden">
+              <button
+                onClick={handleSendFileHeader}
+                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-bold font-mono rounded-lg transition-all shadow-md tracking-wider whitespace-nowrap"
+              >
+                SEND FILE
+              </button>
+            </div>
+          )}
+
+          {/* Dynamic Row B: Receiver Acceptance Prompt */}
+          {filePrompt && incomingFileMetadata.current && !fileWritableStreamRef.current && (
+            <div className="relative bg-zinc-950 border border-indigo-500/20 p-4 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-4 shadow-xl mt-6 animate-fadeIn text-left">
+              <div className="overflow-hidden w-full sm:w-auto">
+                <span className="text-[10px] font-bold text-indigo-400 block uppercase tracking-widest font-mono">INCOMING FILE REQUEST</span>
+                <span className="text-sm text-zinc-200 block truncate font-semibold mt-1 font-mono tracking-wide">{incomingFileMetadata.current.name}</span>
+                <span className="text-[10px] text-zinc-500 block mt-0.5 font-mono">
+                  {(incomingFileMetadata.current.size / 1024 / 1024).toFixed(2)} MB
+                </span>
+              </div>
+              <button
+                onClick={handleAcceptFileRequest}
+                className="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white text-xs font-bold font-mono rounded-lg transition-all shadow-md tracking-wider whitespace-nowrap"
+              >
+                {typeof window.showSaveFilePicker === 'function' ? 'CHOOSE LOCATION & SAVE' : 'DOWNLOAD FILE'}
+              </button>
+            </div>
+          )}
+
+          {/* Dynamic Row C: Active Progress Track Loops */}
+          {progress > 0 && (
+            <div className="bg-zinc-950 border border-zinc-900 p-4 rounded-xl space-y-3 shadow-inner mt-6 text-left">
+              <div className="flex items-center justify-between text-xs font-mono">
+                <span className="text-zinc-500 font-bold uppercase tracking-wider">TRANSFER PROGRESS</span>
+                <span className="text-indigo-400 font-bold">{progress}% SENT</span>
+              </div>
+              <div className="w-full h-1.5 bg-zinc-900 rounded-full overflow-hidden">
                 <div 
-                  className="h-full bg-zinc-400 rounded-full transition-all duration-150 ease-out"
+                  className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full transition-all duration-150 ease-out shadow-[0_0_12px_rgba(99,102,241,0.3)]"
                   style={{ width: `${progress}%` }}
                 ></div>
               </div>
@@ -574,15 +687,8 @@ function App() {
           )}
 
         </main>
-
-        {/* Security Signature Footer */}
-        <footer className="mt-12 text-[10px] text-zinc-600 tracking-wider uppercase select-none opacity-50 text-center">
-          Protected E2EE Data Node Tunnel // Verified Direct Stream
-        </footer>
-
       </div>
     </section>
-
   </div>
 );
 

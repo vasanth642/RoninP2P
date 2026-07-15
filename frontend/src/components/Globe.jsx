@@ -1,42 +1,46 @@
-import React, { useRef, useMemo, useState } from "react";
+import React, { useRef, useMemo } from "react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls, Html } from "@react-three/drei";
 import * as THREE from "three";
 
-// Individual Dynamic Pulsing/Fading Node Component
-function ActivePeerNode({ loc, index }) {
-  const [opacity, setOpacity] = useState(0);
-  const phaseRef = useRef(Math.random() * 100);
-  const stateDurationRef = useRef(4 + Math.random() * 4); // Slightly slower appearance pacing
+function ActivePeerNode({ loc }) {
+  const meshRef = useRef();
+  const htmlRef = useRef();
+  const phase = useMemo(() => Math.random() * 100, []);
+  const duration = useMemo(() => 4 + Math.random() * 4, []);
 
   useFrame((state) => {
-    const elapsed = state.clock.getElapsedTime() + phaseRef.current;
-    const cycle = (elapsed % stateDurationRef.current) / stateDurationRef.current;
+    if (!meshRef.current || !htmlRef.current) return;
+    
+    const elapsed = state.clock.getElapsedTime() + phase;
+    const cycle = (elapsed % duration) / duration;
     const currentOpacity = Math.sin(cycle * Math.PI);
-    setOpacity(currentOpacity);
+
+    if (meshRef.current.material) {
+      meshRef.current.material.opacity = Math.max(0.1, currentOpacity);
+    }
+    
+    htmlRef.current.style.opacity = Math.max(0.2, currentOpacity);
   });
 
-  if (opacity < 0.05) return null;
-
   return (
-    <mesh position={[loc.x, loc.y, loc.z]}>
-      <sphereGeometry args={[0.03, 8, 8]} />
-      <meshBasicMaterial color="#10b981" transparent opacity={opacity} />
+    <mesh ref={meshRef} position={[loc.x, loc.y, loc.z]}>
+      <sphereGeometry args={[0.025, 8, 8]} />
+      <meshBasicMaterial color="#22d3ee" transparent opacity={0} />
       
       <Html distanceFactor={5.5} center>
         <div 
-          className="relative flex items-center justify-center pointer-events-none select-none transition-opacity duration-300"
-          style={{ opacity: opacity }}
+          ref={htmlRef}
+          className="relative flex items-center justify-center pointer-events-none select-none transition-opacity duration-150 ease-out"
+          style={{ opacity: 0 }}
         >
-          {/* Increased pulsing beacon behind avatar */}
-          <div className="absolute inset-0 rounded-full h-10 w-10 bg-emerald-500/20 border border-emerald-400/30 animate-pulse"></div>
+          <div className="absolute inset-0 rounded-full h-10 w-10 bg-indigo-500/20 border border-indigo-400/40 animate-pulse"></div>
           
-          {/* Increased Node Size: Scaled container up to h-8 w-8 for clear visibility */}
-          <div className="relative h-8 w-8 rounded-full border border-zinc-800/80 bg-zinc-950 p-0.5 shadow-xl overflow-hidden">
+          <div className="relative h-8 w-8 rounded-full border border-zinc-700 bg-zinc-950 p-0.5 shadow-2xl overflow-hidden">
             <img 
               src={loc.avatar} 
               alt="Peer Node" 
-              className="h-full w-full object-cover rounded-full filter grayscale contrast-125"
+              className="h-full w-full object-cover rounded-full contrast-110 brightness-110"
             />
           </div>
         </div>
@@ -45,18 +49,16 @@ function ActivePeerNode({ loc, index }) {
   );
 }
 
-// Dynamic Peer-to-Peer Transfer Ray Component
 function PeerTransferRay({ startNode, endNode }) {
   const lineRef = useRef();
   const segmentsCount = 25;
   const progressRef = useRef(0);
-  // Decreased Line Speed: Cut velocity in half for a smooth, high-fidelity pulse path
   const speedRef = useRef(0.006 + Math.random() * 0.006);
 
   const curve = useMemo(() => {
     const startVec = new THREE.Vector3(startNode.x, startNode.y, startNode.z);
     const endVec = new THREE.Vector3(endNode.x, endNode.y, endNode.z);
-    const midPoint = new THREE.Vector3().addVectors(startVec, endVec).multiplyScalar(0.5).normalize().multiplyScalar(2.2);
+    const midPoint = new THREE.Vector3().addVectors(startVec, endVec).multiplyScalar(0.5).normalize().multiplyScalar(1.95);
     return new THREE.QuadraticBezierCurve3(startVec, midPoint, endVec);
   }, [startNode, endNode]);
 
@@ -92,7 +94,7 @@ function PeerTransferRay({ startNode, endNode }) {
         attach="material"
         color="#22d3ee"
         transparent
-        opacity={progressRef.current > 1.0 ? 0 : 0.8}
+        opacity={0.8}
         linewidth={2}
       />
     </line>
@@ -103,14 +105,14 @@ function P2PNetworkGlobe() {
   const globeGroupRef = useRef();
 
   const peerDirectory = useMemo(() => [
-    { x: 0.45, y: 1.45, z: 1.0, avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&q=80" },
-    { x: 1.35, y: 0.75, z: -0.8, avatar: "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=100&q=80" },
-    { x: 1.2, y: -0.65, z: 1.1, avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=100&q=80" },
-    { x: -0.65, y: -1.3, z: 1.1, avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=100&q=80" },
-    { x: -1.3, y: 0.8, z: -1.0, avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=100&q=80" },
-    { x: -0.25, y: 1.65, z: -0.7, avatar: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=100&q=80" },
-    { x: 0.8, y: -1.1, z: -1.2, avatar: "https://images.unsplash.com/photo-1501196354995-cbb51c65aaea?auto=format&fit=crop&w=100&q=80" },
-    { x: -1.45, y: -0.45, z: 0.8, avatar: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=crop&w=100&q=80" }
+    { x: 0.4, y: 1.3, z: 0.9, avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&q=80" },
+    { x: 1.2, y: 0.65, z: -0.7, avatar: "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=100&q=80" },
+    { x: 1.05, y: -0.55, z: 1.0, avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=100&q=80" },
+    { x: -0.55, y: -1.15, z: 1.0, avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=100&q=80" },
+    { x: -1.15, y: 0.7, z: -0.9, avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=100&q=80" },
+    { x: -0.2, y: 1.45, z: -0.6, avatar: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=100&q=80" },
+    { x: 0.7, y: -0.95, z: -1.0, avatar: "https://images.unsplash.com/photo-1501196354995-cbb51c65aaea?auto=format&fit=crop&w=100&q=80" },
+    { x: -1.3, y: -0.4, z: 0.7, avatar: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=crop&w=100&q=80" }
   ], []);
 
   const activeTransfers = useMemo(() => [
@@ -129,25 +131,23 @@ function P2PNetworkGlobe() {
 
   return (
     <group ref={globeGroupRef}>
-      {/* Balanced Grid Lines: Settled opacity down perfectly to 0.22 so it isn't too bright or too dim */}
+      {/* High-Contrast Crisp White Globe Structure */}
       <mesh>
-        <sphereGeometry args={[1.85, 32, 32]} />
+        <sphereGeometry args={[1.65, 32, 32]} />
         <meshBasicMaterial
-          color="#10b981"
+          color="#ffffff"
           wireframe
           transparent
-          opacity={0.22}
+          opacity={0.18}
         />
       </mesh>
 
-      {/* Render the randomized point-to-point laser transfer pipelines */}
       {activeTransfers.map((link, idx) => (
         <PeerTransferRay key={idx} startNode={link.from} endNode={link.to} />
       ))}
 
-      {/* Map out the array of independent pop/fade user nodes */}
       {peerDirectory.map((loc, index) => (
-        <ActivePeerNode key={index} loc={loc} index={index} />
+        <ActivePeerNode key={index} loc={loc} />
       ))}
     </group>
   );
@@ -155,18 +155,17 @@ function P2PNetworkGlobe() {
 
 export function Globe() {
   return (
-    <div className="w-full h-full relative flex items-center justify-center">
-      {/* Deep Ambient Bottom Glow Flare Layer */}
-      <div className="absolute bottom-[-5%] left-1/2 -translate-x-1/2 w-[380px] h-[160px] bg-emerald-500/10 rounded-full blur-[90px] pointer-events-none z-0"></div>
+    <div className="w-full h-full relative flex items-center justify-center overflow-visible">
+      {/* Unified Atmospheric Backing Light */}
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] bg-indigo-500/[0.04] rounded-full blur-[100px] pointer-events-none z-0"></div>
       
-      {/* Balanced layout container box bounding boundaries */}
-      <div className="w-full h-[90%] mb-16 relative z-10">
+      <div className="w-full h-full relative z-10 overflow-visible">
         <Canvas
-          camera={{ position: [0, 0, 5.2], fov: 45 }}
+          camera={{ position: [0, -0.25, 5.2], fov: 45 }}
           dpr={[1, 1.5]}
           gl={{ antialias: true, alpha: true }}
         >
-          <ambientLight intensity={1.6} />
+          <ambientLight intensity={1.8} />
           <P2PNetworkGlobe />
           <OrbitControls
             enableZoom={false}
