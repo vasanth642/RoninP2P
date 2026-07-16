@@ -213,6 +213,7 @@ function App() {
 
           setStatus("File saved successfully directly to your drive!");
           incomingFileMetadata.current = null;
+          setSelectedFile(null);
           setProgress(0);
         }
       }
@@ -224,7 +225,7 @@ function App() {
     //scenario A: if the user is the one first entering we generate a random room id autom atically for them.
     //scenario b if the user is the one that clicked the link , then we autofill the room id for them .
     //the below coe block is the logic for that part.
-
+    
     const urlParams = new URLSearchParams(window.location.search);
     const sharedRoomId = urlParams.get('room');
 
@@ -238,6 +239,15 @@ function App() {
       setRoomId(automaticCode);
       roomIdRef.current = automaticCode;
     }
+
+    const handleMobileForegroundSync = () => {
+      if (socketRef.current && !socketRef.current.connected) {
+        socketRef.current.connect();
+      }
+    };
+
+    window.addEventListener('focus', handleMobileForegroundSync);
+    window.addEventListener('visibilitychange', handleMobileForegroundSync);
 
     socketRef.current = io(BACKEND_URL);
 
@@ -317,8 +327,12 @@ function App() {
       }
     });
 
-    return () => {
-      socketRef.current.disconnect();
+   return () => {
+      window.removeEventListener('focus', handleMobileForegroundSync);
+      window.removeEventListener('visibilitychange', handleMobileForegroundSync);
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
     };
   }, []);
 
@@ -383,18 +397,26 @@ function App() {
 
   //this function will slice the file into smaller chunks and send them over the data channel
   const streamFileChunks = async (fileToStream) => {
+
+    if(!fileToStream) return;
     // 16KB chunk
     let currentOffset = 0;
     const CHUNK_SIZE = 16384;
-    const HIGH_WATERMARK = 1024 * 1024 * 16;
+    //1MB 
+    const HIGH_WATERMARK = 1024 * 1024;
     while (currentOffset < fileToStream.size) {
       if (dataChannelRef.current.bufferedAmount > HIGH_WATERMARK) {
         await new Promise((resolve) => {
           dataChannelRef.current.onbufferedamountlow = () => {
             dataChannelRef.current.onbufferedamountlow = null;
-            resolve();
+            setTimeout(resolve, 1);
           };
         });
+      }
+
+      if(!dataChannelRef.current || dataChannelRef.current.readyState !== 'open'){
+        setStatus("Transfer failed: Peer connection dropped.");
+        return;
       }
 
       const sliceStart = currentOffset;
