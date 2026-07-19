@@ -11,6 +11,11 @@ const rtcConfig = {
         "stun:stun1.l.google.com:19302",
         "stun:stun2.l.google.com:19302"
       ]
+    },
+    {
+      urls: "turn:openrelay.metered.ca:443",
+      username: "openrelayproject",
+      credential: "openrelayproject"
     }
   ]
 };
@@ -413,7 +418,21 @@ function App() {
     //1MB 
     const HIGH_WATERMARK = 1024 * 1024 * 2;
     let lastReportedPct = -1;
+    //this is for handling sleep prevention
+    let wakeLockRef = null;
+    try{
+      if('wakeup' in navigator){
+        wakeLockRef = await navigator.wakeLock.request('screen');
+      }
+    }catch{
+      console.warn("System sleep lock request blocked:", err);
+    }
     while (currentOffset < fileToStream.size) {
+      if(!dataChannelRef.current || dataChannelRef.current.readyState !== 'open' || (peerConnectRef.current && peerConnectRef.current.connectionState === 'failed')){
+        setStatus("Transfer Aborted: Network connection lost.");
+        if(wakeLockRef) wakeLockRef.release();
+        return;
+      }
       if (dataChannelRef.current.bufferedAmount > HIGH_WATERMARK) {
         await new Promise((resolve) => {
           dataChannelRef.current.onbufferedamountlow = () => {
@@ -447,9 +466,10 @@ function App() {
       }
     }
 
-
+    if(wakeLockRef){
+      await wakeLockRef.release();
+    }
     setStatus("File sent successfully to peer device!");
-
   }
 
 
