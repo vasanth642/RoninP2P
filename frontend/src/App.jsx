@@ -597,7 +597,7 @@ function App() {
                 Launch Console
               </button>
               <a
-                href="https://github.com"
+                href="https://github.com/vasanth642/RoninP2P"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="px-10 py-4.5 border border-zinc-800 bg-zinc-900/30 hover:bg-zinc-900/60 hover:border-zinc-700 font-bold text-base rounded-xl tracking-wide text-zinc-300 transition-all duration-200 flex items-center gap-2.5"

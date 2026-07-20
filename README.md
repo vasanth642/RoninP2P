@@ -17,7 +17,7 @@ Ronin P2P addresses the persistent latency and storage overhead found in traditi
 The architecture is explicitly optimized for heavy desktop assets (such as raw video masters, database dumps, and archive sets). The underlying engine leverages native browser low-level APIs to write incoming chunks directly to disk storage, bypassing volatile process RAM and eliminating out-of-memory web application crashes during large transfers.
 
 ---
-## System System Architecture & Data Flow Pipeline
+## System Architecture & Data Flow Pipeline
 ## System Architecture & Data Flow Pipeline
 
 ### Phase 1: Signaling & Connection Handshake
